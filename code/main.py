@@ -172,10 +172,10 @@ def write_data_batch(filepath, data_batch):
         with open(filepath, "a") as f: # No newline='' needed
             for row in data_batch:
                 f.write(",".join(map(str, row)) + "\n") # Convert all elements to string and join
-        
+
         filename = filepath.split('/')[-1]
         print(f"[LOGGER] Appended {len(data_batch)} entries to {filename}")
-        
+
         return True
     except Exception as e:
         print(f"Error writing batch to CSV file: {e}")
@@ -216,8 +216,8 @@ def logger_loop():
 				print("Write failed, data remains in buffer for next attempt.")
 		else:
 			print("Buffer empty, this should not happen if BATCH_SIZE > 0.")
-		
-		
+
+
 
 
 # --- Main Execution ---
@@ -252,8 +252,8 @@ if __name__ == "__main__":
 		# We proceed, but the logger_loop will detect sd_mounted is False.
 
 	# --- Set RTC Time (Optional, uncomment and adjust if you need to set time) ---
-	# set_rtc_time(2025, 11, 15, 13, 1, 0, 5) # Y, M, D, H, M, S, Weekday (Friday)
-	# print(f"Current RTC time: {get_formatted_timestamp()}")
+	# set_rtc_time(2026, 4, 22, 15, 44, 0, 5) # Y, M, D, H, M, S, Weekday (Friday)
+	print(f"Current RTC time: {get_formatted_timestamp()}")
 
 
 	led.off()
