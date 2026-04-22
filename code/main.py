@@ -1,9 +1,9 @@
-from bmi160 import BMI160
+from bno08x_spi import BNO08X_SPI
 from ds3231 import DS3231
-from machine import I2C, Pin, SPI
+from machine import I2C, SPI, Pin
 import time
 import os
-import sdcard 
+import sdcard
 
 led = Pin(25, Pin.OUT) # builtin led
 
@@ -14,11 +14,20 @@ SD_MOSI_PIN = 11
 SD_MISO_PIN = 8
 SD_CS_PIN = 9
 
+BNO_SPI_BUS = 0
+BNO_SCK_PIN = 2
+BNO_MOSI_PIN = 3
+BNO_MISO_PIN = 16
+BNO_CS_PIN = 17
+BNO_INT_PIN = 20
+BNO_RST_PIN = 21
+BNO_WAKE_PIN = 22
+
 # Sensor & Datalogging
 BATCH_SIZE = 10
 # HEADER values should not contain commas
-HEADER = ["Timestamp", "ax", "ay", "az", "roll", "pitch"]
-SAMPLE_RATE_MS = 100 # milliseconds between individual sensor readings
+HEADER = ["Timestamp", "ax", "ay", "az", "qr", "qi", "qj", "qk"]
+SAMPLE_RATE_HZ = 100  # BNO085 report rate
 
 # --- Global/Shared Objects (will be initialized in __main__) ---
 rtc = None
@@ -61,19 +70,24 @@ def get_formatted_timestamp():
 def get_sensor_data_row():
 	"""
 	Reads data from IMU and RTC, returning a single row as a list of strings/numbers.
+	Blocks until both accelerometer and game_quaternion reports are updated (max 100ms).
 	"""
 	global imu, rtc
 	if not imu:
 		print("IMU not initialized. Returning dummy data.")
-		# Return dummy data matching the HEADER format
-		return [get_formatted_timestamp(), "0.0000", "0.0000", "0.0000", "0.00", "0.00"]
+		return [get_formatted_timestamp(), "0.0", "0.0", "0.0", "0.0", "0.0", "0.0", "0.0"]
+
+	deadline = time.ticks_add(time.ticks_ms(), 100)
+	while not (imu.acceleration.updated and imu.game_quaternion.updated):
+		imu.update_sensors()
+		if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+			break
 
 	timestamp = get_formatted_timestamp()
-	ax, ay, az = imu.read_acceleration()
-	pitch, roll = imu.calculate_tilt_angles(ax, ay, az)
+	ax, ay, az = imu.acceleration
+	qr, qi, qj, qk = imu.game_quaternion
 
-	# Return data as a list of strings, ready to be joined by commas
-	return [timestamp, f"{ax:.4f}", f"{ay:.4f}", f"{az:.4f}", f"{roll:.2f}", f"{pitch:.2f}"]
+	return [timestamp, f"{ax:.4f}", f"{ay:.4f}", f"{az:.4f}", f"{qr:.6f}", f"{qi:.6f}", f"{qj:.6f}", f"{qk:.6f}"]
 
 # --- SD Card & File Operations ---
 def init_sd_card():
@@ -159,11 +173,8 @@ def write_data_batch(filepath, data_batch):
             for row in data_batch:
                 f.write(",".join(map(str, row)) + "\n") # Convert all elements to string and join
         
-        # --- FIX STARTS HERE ---
-        # Get the filename without using os.path.basename
-        filename = filepath.split('/')[-1] 
+        filename = filepath.split('/')[-1]
         print(f"[LOGGER] Appended {len(data_batch)} entries to {filename}")
-        # --- FIX ENDS HERE ---
         
         return True
     except Exception as e:
@@ -191,11 +202,10 @@ def logger_loop():
 	while True:
 		led.off()
 
-		# Collect individual sensor readings with appropriate delay
+		# Collect sensor readings — paced by BNO085 interrupt (100 Hz)
 		for _ in range(BATCH_SIZE):
 			data_row = get_sensor_data_row()
 			data_buffer.append(data_row)
-			time.sleep_ms(SAMPLE_RATE_MS) # Delay between individual readings
 
 		led.on()
 		# Write the collected batch
@@ -215,23 +225,26 @@ if __name__ == "__main__":
 
 	led.on()
 
-	# --- I2C & SPI Setup ---
+	# --- Sensor & RTC Setup ---
 	try:
-		# I2C for BMI160
-		i2c1 = I2C(1, scl=Pin(27), sda=Pin(26), freq=400000)
-		imu = BMI160(i2c1)
-		print("[I2C] BMI160 Initialized")
-
-		# I2C for DS3231 RTC
 		i2c0 = I2C(0, scl=Pin(5), sda=Pin(4), freq=400000)
 		rtc = DS3231(i2c0)
 		print("[I2C] RTC Initialized")
-
-		# print("I2C initialized: IMU and RTC connected.")
 	except Exception as e:
-		print(f"Error initializing I2C devices: {e}")
-		# If I2C fails, we can't do much, exit or handle gracefully
-		# For now, let's assume we proceed as best we can.
+		print(f"Error initializing RTC: {e}")
+
+	try:
+		bno_spi = SPI(BNO_SPI_BUS, baudrate=3_000_000, sck=Pin(BNO_SCK_PIN), mosi=Pin(BNO_MOSI_PIN), miso=Pin(BNO_MISO_PIN))
+		cs_pin   = Pin(BNO_CS_PIN,   Pin.OUT, value=1)
+		int_pin  = Pin(BNO_INT_PIN,  Pin.IN)
+		rst_pin  = Pin(BNO_RST_PIN,  Pin.OUT, value=1)
+		wake_pin = Pin(BNO_WAKE_PIN, Pin.OUT, value=1)
+		imu = BNO08X_SPI(bno_spi, cs_pin, rst_pin, int_pin, wake_pin)
+		imu.acceleration.enable(SAMPLE_RATE_HZ)
+		imu.game_quaternion.enable(SAMPLE_RATE_HZ)
+		print("[SPI] BNO085 Initialized")
+	except Exception as e:
+		print(f"Error initializing BNO085: {e}")
 
 	# --- SD Card Init ---
 	if not init_sd_card():

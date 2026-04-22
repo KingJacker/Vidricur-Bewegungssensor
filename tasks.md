@@ -1,0 +1,3 @@
+- [x] implement new accelerometer
+- [x] wiring instructions in accelerometer.md
+- [ ] evaluation suite ( create graphs from recorded data )
