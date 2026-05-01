@@ -36,6 +36,10 @@ See [accelerometer.md](accelerometer.md) for full BNO085 pin connections.
 | SCL | GP5 |
 | SDA | GP4 |
 
+## Use Case
+
+Mounted on an RC vehicle to log orientation continuously. Tilt angle is computed post-recording from the quaternion data to verify the vehicle never exceeded 10°.
+
 ## Software Concept
 
 On startup the Pico initializes the RTC, BNO085, and SD card. A new CSV file is created named after the current datetime. The logger then continuously collects batches of sensor readings and writes them to the file.
@@ -46,6 +50,10 @@ Each row contains: `Timestamp, ax, ay, az, qr, qi, qj, qk`
 - `qr/qi/qj/qk` — Game Rotation Vector quaternion (onboard fusion, no magnetometer needed)
 
 The BNO085 runs at **100 Hz**. Data is written in batches of 10 rows.
+
+## Calibration
+
+The BNO085 automatically saves calibration data to its own internal flash. On every boot it loads the previous calibration — no user action needed. On first-ever boot, calibration starts from scratch and improves automatically in the background during use.
 
 ## CSV Output Format
 

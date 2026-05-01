@@ -9,6 +9,31 @@ import numpy as np
 
 
 THRESHOLD_DEG = 10.0
+CALIB_SECS = 0  # seconds of flat/still data at recording start used as zero reference
+
+
+def quat_conjugate(q):
+    return (q[0], -q[1], -q[2], -q[3])
+
+
+def quat_multiply(a, b):
+    ar, ai, aj, ak = a
+    br, bi, bj, bk = b
+    return (
+        ar*br - ai*bi - aj*bj - ak*bk,
+        ar*bi + ai*br + aj*bk - ak*bj,
+        ar*bj - ai*bk + aj*br + ak*bi,
+        ar*bk + ai*bj - aj*bi + ak*br,
+    )
+
+
+def calibrate_quats(rows, secs):
+    """Average first `secs` seconds of quaternions → return conjugate as zero reference."""
+    t0 = rows[0][0]
+    window = [q for ts, q in rows if (ts - t0).total_seconds() <= secs]
+    mean = np.array(window).mean(axis=0)
+    mean /= np.linalg.norm(mean)
+    return quat_conjugate(tuple(mean))
 
 
 def quat_to_roll_pitch(qr, qi, qj, qk):
@@ -18,19 +43,30 @@ def quat_to_roll_pitch(qr, qi, qj, qk):
 
 
 def load_csv(path):
-    timestamps, rolls, pitches = [], [], []
+    rows = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
                 ts = datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S")
-                qr, qi, qj, qk = float(row["qr"]), float(row["qi"]), float(row["qj"]), float(row["qk"])
+                q = (float(row["qr"]), float(row["qi"]), float(row["qj"]), float(row["qk"]))
             except (ValueError, KeyError):
                 continue
-            roll, pitch = quat_to_roll_pitch(qr, qi, qj, qk)
-            timestamps.append(ts)
-            rolls.append(roll)
-            pitches.append(pitch)
+            rows.append((ts, q))
+
+    if not rows:
+        return [], [], []
+
+    ref_inv = calibrate_quats(rows, CALIB_SECS) if CALIB_SECS > 0 else None
+
+    timestamps, rolls, pitches = [], [], []
+    for ts, q in rows:
+        if ref_inv is not None:
+            q = quat_multiply(ref_inv, q)
+        roll, pitch = quat_to_roll_pitch(*q)
+        timestamps.append(ts)
+        rolls.append(roll)
+        pitches.append(pitch)
     return timestamps, rolls, pitches
 
 
@@ -100,6 +136,6 @@ def plot(path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python graph.py <path/to/recording.csv>")
+        print("Usage: uv run graph.py <path/to/recording.csv>")
         sys.exit(1)
     plot(sys.argv[1])

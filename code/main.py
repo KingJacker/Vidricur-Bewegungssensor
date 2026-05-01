@@ -2,6 +2,7 @@ from bno08x_spi import BNO08X_SPI
 from ds3231 import DS3231
 from machine import I2C, SPI, Pin
 import time
+import math
 import os
 import sdcard
 
@@ -28,12 +29,51 @@ BATCH_SIZE = 10
 # HEADER values should not contain commas
 HEADER = ["Timestamp", "ax", "ay", "az", "qr", "qi", "qj", "qk"]
 SAMPLE_RATE_HZ = 100  # BNO085 report rate
+CALIB_SECS = 5        # seconds of still time on boot for quat zero-reference (0 = disabled)
 
 # --- Global/Shared Objects (will be initialized in __main__) ---
 rtc = None
 imu = None
 sd_mounted = False
 current_filepath = None
+calib_ref_inv = None
+
+# --- Quaternion Calibration ---
+def quat_conjugate(q):
+    return (q[0], -q[1], -q[2], -q[3])
+
+def quat_multiply(a, b):
+    ar, ai, aj, ak = a
+    br, bi, bj, bk = b
+    return (
+        ar*br - ai*bi - aj*bj - ak*bk,
+        ar*bi + ai*br + aj*bk - ak*bj,
+        ar*bj - ai*bk + aj*br + ak*bi,
+        ar*bk + ai*bj - aj*bi + ak*br,
+    )
+
+def calibrate_imu(secs):
+    global imu, calib_ref_inv
+    qsum = [0.0, 0.0, 0.0, 0.0]
+    n = 0
+    t_end = time.ticks_add(time.ticks_ms(), int(secs * 1000))
+    while time.ticks_diff(t_end, time.ticks_ms()) > 0:
+        imu.update_sensors()
+        if imu.game_quaternion.updated:
+            qr, qi, qj, qk = imu.game_quaternion
+            qsum[0] += qr
+            qsum[1] += qi
+            qsum[2] += qj
+            qsum[3] += qk
+            n += 1
+    if n == 0:
+        return
+    mean = tuple(x / n for x in qsum)
+    norm = math.sqrt(sum(x * x for x in mean))
+    mean = tuple(x / norm for x in mean)
+    calib_ref_inv = quat_conjugate(mean)
+    print(f"[CALIB] Done — {n} samples over {secs}s")
+
 
 # --- RTC Functions ---
 def set_rtc_time(year, month, mday, hour, minute, second=0, weekday=0):
@@ -86,6 +126,8 @@ def get_sensor_data_row():
 	timestamp = get_formatted_timestamp()
 	ax, ay, az = imu.acceleration
 	qr, qi, qj, qk = imu.game_quaternion
+	if calib_ref_inv is not None:
+		qr, qi, qj, qk = quat_multiply(calib_ref_inv, (qr, qi, qj, qk))
 
 	return [timestamp, f"{ax:.4f}", f"{ay:.4f}", f"{az:.4f}", f"{qr:.6f}", f"{qi:.6f}", f"{qj:.6f}", f"{qk:.6f}"]
 
@@ -243,6 +285,9 @@ if __name__ == "__main__":
 		imu.acceleration.enable(SAMPLE_RATE_HZ)
 		imu.game_quaternion.enable(SAMPLE_RATE_HZ)
 		print("[SPI] BNO085 Initialized")
+		if CALIB_SECS > 0:
+			print(f"[CALIB] Keep device still for {CALIB_SECS}s...")
+			calibrate_imu(CALIB_SECS)
 	except Exception as e:
 		print(f"Error initializing BNO085: {e}")
 
